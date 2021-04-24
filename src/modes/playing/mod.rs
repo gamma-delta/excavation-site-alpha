@@ -10,7 +10,7 @@ use quad_rand::compat::QuadRand;
 use rand::Rng;
 
 use std::{
-    collections::{hash_map::Entry, HashMap},
+    collections::{hash_map::Entry, HashMap, HashSet},
     f32::consts::TAU,
 };
 
@@ -23,7 +23,7 @@ const SCREEN_WIDTH: isize = (WIDTH / BLOCK_SIZE) as isize;
 /// How many grid squares down the whole screen would be
 const SCREEN_HEIGHT: isize = (HEIGHT / BLOCK_SIZE) as isize;
 /// The number of tiles you can look after the last tile
-const BOTTOM_VIEW_SIZE: isize = SCREEN_HEIGHT + 1;
+const BOTTOM_VIEW_SIZE: isize = SCREEN_HEIGHT / 2;
 
 const FALL_ACCELLERATION: f32 = 1.0 / 60.0 / 60.0;
 // If this were more than 1 the block could skip through others
@@ -39,13 +39,13 @@ const CONVEYOR_Y_BOTTOM: f32 = 184.0;
 
 /// Chance a block takes damage per frame based on the number of things it links to
 const BREAK_CHANCES: [f64; 5] = [
-    0.0,                // a block resting never takes damage
-    20.0 / 60.0 / 60.0, // once every 20 seconds
-    30.0 / 60.0 / 60.0, // 30 seconds
-    40.0 / 60.0 / 60.0, // 40 seconds
-    1.0 / 60.0,         // 60 seconds
+    0.0, // a block resting never takes damage
+    0.3 / 60.0,
+    1.0 / 60.0,
+    1.5 / 60.0,
+    3.0 / 60.0,
 ];
-const BREAK_TIMER: u64 = 10;
+const BREAK_TIMER: u64 = 30;
 
 #[derive(Clone)]
 pub struct ModePlaying {
@@ -118,9 +118,13 @@ impl ModePlaying {
         self.handle_input(globals);
 
         // Damage blocks and record stats
+        // Stability algorithm:
+        // - Anchors have a stability of 1.
+        // - The stability of any other block is
         let mut max_depth = 0;
         let mut superposes = 0.0;
         let mut masses = 0.0;
+        let mut present_depths = HashSet::new();
         let poses_to_break_chance = self
             .stable_blocks
             .iter()
@@ -141,9 +145,10 @@ impl ModePlaying {
                     .count();
                 let mut break_chance = BREAK_CHANCES[link_count];
                 // Blocks by the wall are more bolstered
-                if pos.x.abs() >= CHASM_WIDTH / 2 {
+                if pos.x.abs() > CHASM_WIDTH / 2 {
                     break_chance /= 2.0;
                 }
+                present_depths.insert(pos.y);
                 (*pos, break_chance)
             })
             .collect_vec();
@@ -155,19 +160,32 @@ impl ModePlaying {
             superposes / masses
         };
 
+        let depths_with_rows = present_depths
+            .into_iter()
+            .filter(|depth| {
+                // Check if all xposes have solid blocks
+                (0..CHASM_WIDTH).all(|idx| {
+                    let col = idx - CHASM_WIDTH / 2;
+                    self.stable_blocks.contains_key(&ICoord::new(col, *depth))
+                })
+            })
+            .collect_vec();
+
         if self.frames_elapsed % BREAK_TIMER == 0 {
             for (pos, chance) in poses_to_break_chance {
-                let entry = self.stable_blocks.entry(pos);
-                if let Entry::Occupied(mut occupied) = entry {
-                    let block = occupied.get_mut();
-                    if QuadRand.gen_bool(chance) {
-                        block.damage += 1;
-                        if block.damage > block.resilience() {
-                            // die
-                            occupied.remove_entry();
+                if !depths_with_rows.contains(&pos.y) {
+                    let entry = self.stable_blocks.entry(pos);
+                    if let Entry::Occupied(mut occupied) = entry {
+                        let block = occupied.get_mut();
+                        if QuadRand.gen_bool(chance) {
+                            block.damage += 1;
+                            if block.damage > block.resilience() {
+                                // die
+                                occupied.remove_entry();
+                            }
                         }
-                    }
-                } // else we got a problem
+                    } // else we got a problem}
+                }
             }
         }
         // Check for blocks that should fall
@@ -190,29 +208,41 @@ impl ModePlaying {
             let root_a = find_root(a, parents);
             let root_b = find_root(b, parents);
             if root_a != root_b {
-                // apparently it's best to flip a coin to pick
-                if QuadRand.gen_bool(0.5) {
-                    parents.insert(root_a, root_b);
+                // Always make an anchor the parent if i can
+                let block_a = self.stable_blocks.get(&root_a);
+                let block_b = self.stable_blocks.get(&root_b);
+
+                let (kid, parent) = if matches!(block_a, Some(block) if block.kind == BlockKind::Anchor)
+                {
+                    (root_a, root_b)
+                } else if matches!(block_b, Some(block) if block.kind == BlockKind::Anchor) {
+                    (root_b, root_a)
+                } else if QuadRand.gen_bool(0.5) {
+                    // apparently it's best to flip a coin to pick
+                    (root_a, root_b)
                 } else {
-                    parents.insert(root_b, root_a);
-                }
+                    (root_b, root_a)
+                };
+                parents.insert(kid, parent);
             }
         };
 
         for (&pos, block) in self.stable_blocks.iter() {
             // Only need to check left and down for matching
-            let links_down = self.stable_blocks.contains_key(&(pos + ICoord::new(0, 1)));
-            let neighbor_pos = pos + ICoord::new(1, 0);
-            let links_right = if let Some(neighbor) = self.stable_blocks.get(&neighbor_pos) {
-                matches!((
-                    &block.connectors[Direction4::East as usize],
-                    &neighbor.connectors[Direction4::West as usize],
+            for dir in &[Direction4::East, Direction4::South] {
+                let neighbor_pos = pos + dir.deltas();
+
+                let links = if let Some(neighbor) = self.stable_blocks.get(&neighbor_pos) {
+                    matches!((
+                    &block.connectors[*dir as usize],
+                    &neighbor.connectors[dir.flip() as usize],
                 ), (Some(a), Some(b)) if a.links_with(b))
-            } else {
-                false
-            };
-            if links_down || links_right {
-                unite(pos, neighbor_pos, &mut parents);
+                } else {
+                    false
+                };
+                if links {
+                    unite(pos, neighbor_pos, &mut parents);
+                }
             }
         }
         // Now, for each block, check if it has the same root as an anchor block
@@ -231,17 +261,23 @@ impl ModePlaying {
             .stable_blocks
             .iter()
             .filter_map(|(pos, block)| {
-                let root = find_root(*pos, &parents);
-                if anchor_roots.contains(&root) {
-                    // nice keep this one
+                let bottom_pos = *pos + ICoord::new(0, 1);
+                let bottom_support = self.stable_blocks.contains_key(&bottom_pos);
+                if bottom_support {
+                    // if we have bottom block, don't fall
                     None
                 } else {
-                    // die
-                    Some(*pos)
+                    let root = find_root(*pos, &parents);
+                    if anchor_roots.contains(&root) {
+                        // nice keep this one
+                        None
+                    } else {
+                        // die
+                        Some(*pos)
+                    }
                 }
             })
             .collect_vec();
-
         for key in keys_to_remove {
             if let Some(block) = self.stable_blocks.remove(&key) {
                 self.falling_blocks.push(FallingBlock {
@@ -331,10 +367,17 @@ impl ModePlaying {
                 if !is_mouse_button_down(MouseButton::Left) {
                     let idx = info.idx;
                     let blockpos = self.pixel_to_block(mx, my);
-                    if blockpos.x.abs() < CHASM_WIDTH / 2 + 1
-                        && blockpos.y >= 0
-                        && !self.stable_blocks.contains_key(&blockpos)
-                    {
+
+                    let block = self.conveyor_blocks.get(idx).unwrap();
+                    let valid_pos = block.is_valid_pos(blockpos);
+                    let anchored_ok = if block.kind == BlockKind::Anchor {
+                        // anchors must match up in order to be placed
+                        Self::is_stable_anchorless(&self.stable_blocks, blockpos, block)
+                    } else {
+                        true
+                    };
+
+                    if valid_pos && anchored_ok && !self.stable_blocks.contains_key(&blockpos) {
                         // poggers
                         let block = self.conveyor_blocks.remove(idx);
                         self.stable_blocks.insert(blockpos, block);
@@ -463,8 +506,14 @@ impl ModePlaying {
         for (idx, block) in self.conveyor_blocks.iter().enumerate() {
             let (cx, cy, color) = if matches!(&self.held, Some(held) if held.idx == idx) {
                 let blockpos = self.pixel_to_block(mx, my);
-                if blockpos.x.abs() < CHASM_WIDTH / 2 + 1 && blockpos.y >= 0 {
-                    // we're inside!
+                let anchored_ok = if block.kind == BlockKind::Anchor {
+                    // anchors must match up in order to be placed
+                    Self::is_stable_anchorless(&self.stable_blocks, blockpos, block)
+                } else {
+                    true
+                };
+                if block.is_valid_pos(blockpos) && anchored_ok {
+                    // we're at a good pos
                     let (cx, cy) = self.block_to_pixel(blockpos);
                     (cx, cy, Color::new(1.0, 1.0, 1.0, 0.8))
                 } else {
@@ -504,8 +553,15 @@ impl ModePlaying {
 
     /// Check if this block can remain stable here: either it links up or rests on a block.
     fn is_stable(stable_blocks: &HashMap<ICoord, Block>, pos: ICoord, block: &Block) -> bool {
-        block.kind == BlockKind::Anchor
-            || stable_blocks.get(&(pos + ICoord::new(0, 1))).is_some()
+        block.kind == BlockKind::Anchor || Self::is_stable_anchorless(stable_blocks, pos, block)
+    }
+
+    fn is_stable_anchorless(
+        stable_blocks: &HashMap<ICoord, Block>,
+        pos: ICoord,
+        block: &Block,
+    ) -> bool {
+        stable_blocks.get(&(pos + ICoord::new(0, 1))).is_some()
             || Direction4::DIRECTIONS.iter().any(|&dir| {
                 if let Some(conn) = &block.connectors[dir as usize] {
                     // It sticks if links to there

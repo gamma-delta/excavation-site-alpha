@@ -1,7 +1,7 @@
-use super::BLOCK_SIZE;
+use super::{BLOCK_SIZE, CHASM_WIDTH};
 use crate::{assets::Textures, Globals};
 
-use cogs_gamedev::directions::Direction4;
+use cogs_gamedev::{directions::Direction4, int_coords::ICoord};
 use macroquad::prelude::{Color, Texture2D, WHITE};
 use rand::{
     distributions::Standard,
@@ -41,6 +41,15 @@ impl Block {
             BlockKind::Solid => 5,
             BlockKind::Anchor => 50,
         }
+    }
+
+    pub fn is_valid_pos(&self, pos: ICoord) -> bool {
+        let valid_x = match self.kind {
+            BlockKind::Anchor => pos.x.abs() == CHASM_WIDTH / 2 + 1,
+            _ => pos.x.abs() < CHASM_WIDTH / 2 + 1,
+        };
+        let valid_y = pos.y >= 0;
+        valid_x && valid_y
     }
 
     pub fn draw_absolute(&self, cx: f32, cy: f32, globals: &Globals) {
@@ -124,18 +133,30 @@ impl Block {
 
 impl Distribution<Block> for Standard {
     fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> Block {
-        let kind = rng.gen();
-        // The connector must have at least one non-None value
-        let mut connectors = [Some(rng.gen()), None, None, None];
-        for item in connectors.iter_mut().skip(1) {
-            *item = rng.gen();
-        }
-        connectors.shuffle(rng);
+        if rng.gen_bool(0.05) {
+            // small chance to make an anchor
+            let mut connectors = [Some(rng.gen()), None, None, None];
+            connectors.shuffle(rng);
 
-        Block {
-            connectors,
-            kind,
-            damage: 0,
+            Block {
+                connectors,
+                kind: BlockKind::Anchor,
+                damage: 0,
+            }
+        } else {
+            let kind = rng.gen();
+            // The connector must have at least one non-None value
+            let mut connectors = [Some(rng.gen()), None, None, None];
+            for item in connectors.iter_mut().skip(1) {
+                *item = rng.gen();
+            }
+            connectors.shuffle(rng);
+
+            Block {
+                connectors,
+                kind,
+                damage: 0,
+            }
         }
     }
 }
