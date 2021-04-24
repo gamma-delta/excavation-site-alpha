@@ -45,7 +45,7 @@ const BREAK_CHANCES: [f64; 5] = [
     1.5 / 60.0,
     3.0 / 60.0,
 ];
-const BREAK_TIMER: u64 = 30;
+const BREAK_TIMER: u64 = 60;
 
 #[derive(Clone)]
 pub struct ModePlaying {
@@ -171,23 +171,23 @@ impl ModePlaying {
             })
             .collect_vec();
 
-        if self.frames_elapsed % BREAK_TIMER == 0 {
-            for (pos, chance) in poses_to_break_chance {
-                if !depths_with_rows.contains(&pos.y) {
-                    let entry = self.stable_blocks.entry(pos);
-                    if let Entry::Occupied(mut occupied) = entry {
-                        let block = occupied.get_mut();
-                        if QuadRand.gen_bool(chance) {
-                            block.damage += 1;
-                            if block.damage > block.resilience() {
-                                // die
-                                occupied.remove_entry();
-                            }
-                        }
-                    } // else we got a problem}
-                }
+        for (pos, mut chance) in poses_to_break_chance {
+            if !depths_with_rows.contains(&pos.y) {
+                chance *= 0.1;
             }
+            let entry = self.stable_blocks.entry(pos);
+            if let Entry::Occupied(mut occupied) = entry {
+                let block = occupied.get_mut();
+                if self.frames_elapsed % BREAK_TIMER == 0 && QuadRand.gen_bool(chance) {
+                    block.damage += 1;
+                }
+                if block.damage > block.resilience() {
+                    // die
+                    occupied.remove_entry();
+                }
+            } // else we got a problem}
         }
+
         // Check for blocks that should fall
         // use a "union find"
 
@@ -257,37 +257,33 @@ impl ModePlaying {
                 }
             })
             .collect_vec();
-        let keys_to_remove = self
+
+        let to_drop = self
             .stable_blocks
             .iter()
-            .filter_map(|(pos, block)| {
-                let bottom_pos = *pos + ICoord::new(0, 1);
-                let bottom_support = self.stable_blocks.contains_key(&bottom_pos);
-                if bottom_support {
-                    // if we have bottom block, don't fall
-                    None
-                } else {
-                    let root = find_root(*pos, &parents);
+            .filter_map(|(original_pos, block)| {
+                let mut pos = *original_pos;
+                while self.stable_blocks.contains_key(&pos) {
+                    let root = find_root(pos, &parents);
                     if anchor_roots.contains(&root) {
-                        // nice keep this one
-                        None
-                    } else {
-                        // die
-                        Some(*pos)
+                        // it's a keeper
+                        return None;
                     }
+                    pos += ICoord::new(0, 1);
                 }
+                Some(*original_pos)
             })
             .collect_vec();
-        for key in keys_to_remove {
-            if let Some(block) = self.stable_blocks.remove(&key) {
-                self.falling_blocks.push(FallingBlock {
-                    block,
-                    x: key.x,
-                    y: key.y as f32,
-                    time_alive: 0,
-                });
-            }
-            // else something funky happened...
+        for (pos, block) in self
+            .stable_blocks
+            .drain_filter(|pos, block| to_drop.contains(pos))
+        {
+            self.falling_blocks.push(FallingBlock {
+                block,
+                x: pos.x,
+                y: pos.y as f32,
+                time_alive: 0,
+            });
         }
 
         // Update falling blocks
@@ -356,6 +352,16 @@ impl ModePlaying {
                         self.held = Some(HoldInfo { idx });
                     }
                 }
+
+                if is_mouse_button_pressed(MouseButton::Left) {
+                    let blockpos = self.pixel_to_block(mx, my);
+                    match self.stable_blocks.get_mut(&blockpos) {
+                        Some(block) if block.is_removable() => {
+                            block.damage += 1;
+                        }
+                        _ => {}
+                    }
+                }
             }
             Some(info) => {
                 if scroll_y > 0.0 {
@@ -372,7 +378,7 @@ impl ModePlaying {
                     let valid_pos = block.is_valid_pos(blockpos);
                     let anchored_ok = if block.kind == BlockKind::Anchor {
                         // anchors must match up in order to be placed
-                        Self::is_stable_anchorless(&self.stable_blocks, blockpos, block)
+                        Self::can_anchor_be_placed(&self.stable_blocks, blockpos, block)
                     } else {
                         true
                     };
@@ -508,7 +514,7 @@ impl ModePlaying {
                 let blockpos = self.pixel_to_block(mx, my);
                 let anchored_ok = if block.kind == BlockKind::Anchor {
                     // anchors must match up in order to be placed
-                    Self::is_stable_anchorless(&self.stable_blocks, blockpos, block)
+                    Self::can_anchor_be_placed(&self.stable_blocks, blockpos, block)
                 } else {
                     true
                 };
@@ -570,6 +576,15 @@ impl ModePlaying {
                     false
                 }
             })
+    }
+
+    fn can_anchor_be_placed(
+        stable_blocks: &HashMap<ICoord, Block>,
+        pos: ICoord,
+        block: &Block,
+    ) -> bool {
+        stable_blocks.contains_key(&(pos + ICoord::new(0, -1)))
+            || Self::is_stable_anchorless(stable_blocks, pos, block)
     }
 
     fn block_to_pixel(&self, pos: ICoord) -> (f32, f32) {

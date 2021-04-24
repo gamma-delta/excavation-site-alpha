@@ -37,9 +37,9 @@ impl Block {
     /// Return the amount of damage this can take
     pub fn resilience(&self) -> u8 {
         match self.kind {
-            BlockKind::Scaffold => 3,
-            BlockKind::Solid => 5,
-            BlockKind::Anchor => 50,
+            BlockKind::Scaffold => 8,
+            BlockKind::Solid => 16,
+            BlockKind::Anchor => 64,
         }
     }
 
@@ -203,6 +203,9 @@ impl Distribution<ConnectorShape> for Standard {
         let options = [
             ConnectorShape::Square,
             ConnectorShape::Round,
+            ConnectorShape::Round,
+            ConnectorShape::Pointy,
+            ConnectorShape::Pointy,
             ConnectorShape::Pointy,
         ];
         options[rng.gen_range(0..options.len())]
