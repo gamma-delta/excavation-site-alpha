@@ -1,0 +1,4 @@
+Block textures are from the Chisel mod for Minecraft. I slightly edited them.
+They are licensed under CC BY-NC-SA 4.0. 
+https://creativecommons.org/licenses/by-nc-sa/4.0/
+https://github.com/Chisel-Team/Chisel

@@ -1,0 +1,18 @@
+deeper down levels...
+
+Keep travelling into the future where box pushes affect things in the future
+
+scoring game like 2048 where you can push the boxes north, south, east, west, and down
+Colored boxes: 3 of a kind matches into scores
+
+deeper into the future? deeper in the call stack.
+
+falling down into a chasm
+
+Roguelike with brittle floors; push down boxes from higher levels to squish
+enemies
+
+Anti-match 3 game where the objective is to build down as much as possible
+
+Match up block edges to build down into a chasm.
+Go as deep as possible, get your center of mass low!

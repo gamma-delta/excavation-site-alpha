@@ -26,12 +26,30 @@ impl Assets {
 #[derive(Clone)]
 pub struct Textures {
     pub title_banner: Texture2D,
+
+    pub scaffold: Texture2D,
+    pub solid: Texture2D,
+    pub anchor: Texture2D,
+    pub connector_atlas: Texture2D,
+
+    pub dark_dirt: Texture2D,
+    pub dirt_edge: Texture2D,
+    pub dirt_body: Texture2D,
 }
 
 impl Textures {
     async fn init() -> Self {
         Self {
             title_banner: texture("title/banner").await,
+
+            scaffold: texture("scaffold").await,
+            solid: texture("rust2").await,
+            anchor: texture("terrain-iron-simple-bottom").await,
+            connector_atlas: texture("connector_atlas").await,
+
+            dark_dirt: texture("dirt").await,
+            dirt_edge: texture("reinforced_dirt").await,
+            dirt_body: texture("dirt_back").await,
         }
     }
 }

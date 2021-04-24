@@ -1,18 +1,23 @@
+#![feature(hash_drain_filter)]
+
 mod assets;
-use assets::Assets;
 mod drawutils;
 mod modes;
-use crate::modes::ModeLogo;
+mod random;
+
+use assets::Assets;
+use modes::{ModeLogo, ModePlaying};
 
 use macroquad::prelude::*;
 
 use std::{
     sync::{Arc, Barrier},
     thread,
+    time::{Duration, Instant},
 };
 
-const WIDTH: f32 = 640.0;
-const HEIGHT: f32 = 480.0;
+const WIDTH: f32 = 320.0;
+const HEIGHT: f32 = 240.0;
 const ASPECT_RATIO: f32 = WIDTH / HEIGHT;
 
 /// The `macroquad::main` macro uses this.
@@ -32,6 +37,8 @@ fn window_conf() -> Conf {
 
 #[macroquad::main(window_conf)]
 async fn main() {
+    let time = Instant::now();
+
     // The engine is multithreaded.
     // Given a state S0, updating to S1 and drawing S0 happens at the same time.
     // The state is sent down here
@@ -45,6 +52,10 @@ async fn main() {
     let mut globals = Globals::new().await;
     let mut mode_stack = vec![Gamemode::Logo(ModeLogo::new())];
     let _update_handle = thread::spawn(move || {
+        // Seed the RNG now
+        let dur = time.elapsed();
+        macroquad::rand::srand(dur.as_nanos() as u64);
+
         loop {
             // Clone the current state and send it off for drawing
             draw_tx
@@ -55,6 +66,7 @@ async fn main() {
             // To change state, return a non-None transition.
             let transition = match mode_stack.last_mut().unwrap() {
                 Gamemode::Logo(mode) => mode.update(&mut globals),
+                Gamemode::Playing(mode) => mode.update(&mut globals),
             };
             match transition {
                 Transition::None => {}
@@ -95,6 +107,7 @@ async fn main() {
         // Also do audio in the draw method, I guess, it doesn't really matter where you do it...
         match mode {
             Gamemode::Logo(mode) => mode.draw(&globals),
+            Gamemode::Playing(mode) => mode.draw(&globals),
         }
 
         // Done rendering to the canvas; go back to our normal camera
@@ -140,6 +153,7 @@ async fn main() {
 #[derive(Clone)]
 pub enum Gamemode {
     Logo(ModeLogo),
+    Playing(ModePlaying),
 }
 
 /// Ways modes can transition

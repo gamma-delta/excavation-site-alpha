@@ -1,6 +1,13 @@
+use macroquad::{
+    audio::stop_sound,
+    prelude::{is_mouse_button_down, MouseButton},
+};
+
 use crate::{drawutils, Gamemode, Globals, Transition, HEIGHT, WIDTH};
 
 use std::f32::consts::TAU;
+
+use super::ModePlaying;
 
 const ROTATION_SPEED: f32 = 0.03;
 /// Number of "blades" of the starburst
@@ -21,13 +28,12 @@ impl ModeLogo {
         Self { frames_ran: 0 }
     }
 
-    pub fn update(&mut self, _globals: &mut Globals) -> Transition {
-        let trans = if self.frames_ran < 300 {
+    pub fn update(&mut self, globals: &mut Globals) -> Transition {
+        let trans = if self.frames_ran < 300 && !is_mouse_button_down(MouseButton::Left) {
             Transition::None
         } else {
-            // Put your "title screen" state here or something!
-            // Right now it just loops
-            Transition::Swap(Gamemode::Logo(ModeLogo::new()))
+            stop_sound(globals.assets.sounds.title_jingle);
+            Transition::Swap(Gamemode::Playing(ModePlaying::new()))
         };
 
         self.frames_ran += 1;
