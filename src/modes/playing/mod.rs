@@ -189,94 +189,44 @@ impl ModePlaying {
         }
 
         // Check for blocks that should fall
-        // use a "union find"
-
-        // Map nodes to their parents
-        let mut parents = HashMap::<ICoord, ICoord>::new();
-        let find_root = |pos: ICoord, parents: &HashMap<_, _>| {
-            let mut current = pos;
-            loop {
-                let parent = parents.get(&current);
-                if let Some(parent) = parent {
-                    current = *parent;
-                } else {
-                    return current;
-                }
-            }
-        };
-        let unite = |a: ICoord, b: ICoord, parents: &mut HashMap<_, _>| {
-            let root_a = find_root(a, parents);
-            let root_b = find_root(b, parents);
-            if root_a != root_b {
-                // Always make an anchor the parent if i can
-                let block_a = self.stable_blocks.get(&root_a);
-                let block_b = self.stable_blocks.get(&root_b);
-
-                let (kid, parent) = if matches!(block_a, Some(block) if block.kind == BlockKind::Anchor)
-                {
-                    (root_a, root_b)
-                } else if matches!(block_b, Some(block) if block.kind == BlockKind::Anchor) {
-                    (root_b, root_a)
-                } else if QuadRand.gen_bool(0.5) {
-                    // apparently it's best to flip a coin to pick
-                    (root_a, root_b)
-                } else {
-                    (root_b, root_a)
-                };
-                parents.insert(kid, parent);
-            }
-        };
-
-        for (&pos, block) in self.stable_blocks.iter() {
-            // Only need to check left and down for matching
-            for dir in &[Direction4::East, Direction4::South] {
-                let neighbor_pos = pos + dir.deltas();
-
-                let links = if let Some(neighbor) = self.stable_blocks.get(&neighbor_pos) {
-                    matches!((
-                    &block.connectors[*dir as usize],
-                    &neighbor.connectors[dir.flip() as usize],
-                ), (Some(a), Some(b)) if a.links_with(b))
-                } else {
-                    false
-                };
-                if links {
-                    unite(pos, neighbor_pos, &mut parents);
-                }
-            }
-        }
-        // Now, for each block, check if it has the same root as an anchor block
-        let anchor_roots = self
+        let mut queries = self
             .stable_blocks
             .iter()
             .filter_map(|(pos, block)| {
                 if block.kind == BlockKind::Anchor {
-                    Some(find_root(*pos, &parents))
+                    Some(*pos)
                 } else {
                     None
                 }
             })
             .collect_vec();
-
-        let to_drop = self
-            .stable_blocks
-            .iter()
-            .filter_map(|(original_pos, block)| {
-                let mut pos = *original_pos;
-                while self.stable_blocks.contains_key(&pos) {
-                    let root = find_root(pos, &parents);
-                    if anchor_roots.contains(&root) {
-                        // it's a keeper
-                        return None;
+        let mut stable_poses = HashSet::new();
+        while let Some(pos) = queries.pop() {
+            if stable_poses.insert(pos) {
+                // i've never met this coord in my life
+                if let Some(block) = self.stable_blocks.get(&pos) {
+                    queries.push(pos + ICoord::new(0, -1));
+                    for &dir in &[Direction4::South, Direction4::East, Direction4::West] {
+                        let neighbor_pos = pos + dir.deltas();
+                        if let Some(neighbor) = self.stable_blocks.get(&neighbor_pos) {
+                            let connects = match (
+                                &block.connectors[dir as usize],
+                                &neighbor.connectors[dir.flip() as usize],
+                            ) {
+                                (Some(a), Some(b)) => a.links_with(b),
+                                _ => false,
+                            };
+                            if connects {
+                                queries.push(neighbor_pos);
+                            }
+                        }
                     }
-                    pos += ICoord::new(0, 1);
                 }
-                Some(*original_pos)
-            })
-            .collect_vec();
+            }
+        }
         for (pos, block) in self
             .stable_blocks
-            .drain_filter(|pos, block| to_drop.contains(pos))
+            .drain_filter(|pos, _| !stable_poses.contains(pos))
         {
             self.falling_blocks.push(FallingBlock {
                 block,
