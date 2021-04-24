@@ -1,12 +1,18 @@
 mod blocks;
 
 use self::blocks::{Block, BlockKind, Connector, FallingBlock};
-use crate::{Globals, Transition, HEIGHT, WIDTH};
+use crate::{drawutils, Globals, Transition, HEIGHT, WIDTH};
 
 use cogs_gamedev::{directions::Direction4, int_coords::ICoord};
+use drawutils::mouse_position_pixel;
 use itertools::Itertools;
+use quad_rand::compat::QuadRand;
+use rand::Rng;
 
-use std::{collections::HashMap, f32::consts::TAU};
+use std::{
+    collections::{hash_map::Entry, HashMap},
+    f32::consts::TAU,
+};
 
 // In block coordinates, (0, 0) is the middle of the very top of the chasm.
 // Y increases down. 0 is the level where the ground begins (so it's inside the ground.)
@@ -19,12 +25,27 @@ const SCREEN_HEIGHT: isize = (HEIGHT / BLOCK_SIZE) as isize;
 /// The number of tiles you can look after the last tile
 const BOTTOM_VIEW_SIZE: isize = SCREEN_HEIGHT + 1;
 
-const FALL_VELOCITY: f32 = 2.0 / 60.0;
+const FALL_ACCELLERATION: f32 = 1.0 / 60.0 / 60.0;
+// If this were more than 1 the block could skip through others
+const FALL_TERMINAL: f32 = 0.9;
 
 const BLOCK_SIZE: f32 = 16.0;
 
-const SCROLL_HOTZONE_SIZE: f32 = 1.0 / 12.0;
+const SCROLL_HOTZONE_SIZE: f32 = 16.0;
 const SCROLL_SPEED: f32 = 0.45;
+
+const CONVEYOR_MAX_SIZE: usize = 7;
+const CONVEYOR_Y_BOTTOM: f32 = 184.0;
+
+/// Chance a block takes damage per frame based on the number of things it links to
+const BREAK_CHANCES: [f64; 5] = [
+    0.0,                // a block resting never takes damage
+    20.0 / 60.0 / 60.0, // once every 20 seconds
+    30.0 / 60.0 / 60.0, // 30 seconds
+    40.0 / 60.0 / 60.0, // 40 seconds
+    1.0 / 60.0,         // 60 seconds
+];
+const BREAK_TIMER: u64 = 10;
 
 #[derive(Clone)]
 pub struct ModePlaying {
@@ -32,6 +53,10 @@ pub struct ModePlaying {
     stable_blocks: HashMap<ICoord, Block>,
     /// Blocks visually falling right now
     falling_blocks: Vec<FallingBlock>,
+    /// Blocks in the conveyor on the side
+    conveyor_blocks: Vec<Block>,
+    /// Index in the conveyor of the block being held by the player right now
+    held: Option<HoldInfo>,
 
     /// How far down I have scrolled.
     /// When this is 0, block (0, 0) is in the dead center of the screen
@@ -41,6 +66,8 @@ pub struct ModePlaying {
     max_depth: isize,
     /// Cached center of mass
     center_of_mass: f32,
+
+    frames_elapsed: u64,
 }
 
 impl ModePlaying {
@@ -53,7 +80,7 @@ impl ModePlaying {
                 let x = (CHASM_WIDTH + 1) / 2 * if side == 0 { -1 } else { 1 };
                 let y = depth;
 
-                let conn = Connector::sample();
+                let conn = QuadRand.gen();
                 let mut connectors = [None, None, None, None];
                 let dir = if side == 0 {
                     Direction4::East
@@ -67,40 +94,57 @@ impl ModePlaying {
                     Block {
                         connectors,
                         kind: BlockKind::Anchor,
+                        damage: 0,
                     },
                 );
             }
         }
 
+        let conveyor_blocks = (0..CONVEYOR_MAX_SIZE).map(|_| QuadRand.gen()).collect_vec();
+
         Self {
             stable_blocks,
             falling_blocks: Vec::new(),
+            conveyor_blocks,
+            held: None,
             scroll_depth: 0.0,
             max_depth: 0,
             center_of_mass: 0.0,
+            frames_elapsed: 0,
         }
     }
 
     pub fn update(&mut self, globals: &mut Globals) -> Transition {
         self.handle_input(globals);
 
-        // Check for blocks that should fall
+        // Damage blocks and record stats
         let mut max_depth = 0;
         let mut superposes = 0.0;
         let mut masses = 0.0;
-        let keys_to_remove = &self
+        let poses_to_break_chance = self
             .stable_blocks
             .iter()
-            .filter_map(|(pos, block)| {
-                let keep = Self::is_stable(&self.stable_blocks, *pos, block);
-                if keep {
-                    max_depth = max_depth.max(pos.y);
-                    superposes += pos.y as f32 * block.mass();
-                    masses += block.mass();
-                    None
-                } else {
-                    Some(*pos)
+            .map(|(pos, block)| {
+                max_depth = max_depth.max(pos.y);
+                superposes += pos.y as f32 * block.mass();
+                masses += block.mass();
+
+                let link_count = Direction4::DIRECTIONS
+                    .iter()
+                    .filter(|dir| {
+                        if let Some(conn) = &block.connectors[**dir as usize] {
+                            Self::would_link(&self.stable_blocks, *pos, conn, **dir)
+                        } else {
+                            false
+                        }
+                    })
+                    .count();
+                let mut break_chance = BREAK_CHANCES[link_count];
+                // Blocks by the wall are more bolstered
+                if pos.x.abs() >= CHASM_WIDTH / 2 {
+                    break_chance /= 2.0;
                 }
+                (*pos, break_chance)
             })
             .collect_vec();
         self.max_depth = max_depth;
@@ -111,12 +155,100 @@ impl ModePlaying {
             superposes / masses
         };
 
+        if self.frames_elapsed % BREAK_TIMER == 0 {
+            for (pos, chance) in poses_to_break_chance {
+                let entry = self.stable_blocks.entry(pos);
+                if let Entry::Occupied(mut occupied) = entry {
+                    let block = occupied.get_mut();
+                    if QuadRand.gen_bool(chance) {
+                        block.damage += 1;
+                        if block.damage > block.resilience() {
+                            // die
+                            occupied.remove_entry();
+                        }
+                    }
+                } // else we got a problem
+            }
+        }
+        // Check for blocks that should fall
+        // use a "union find"
+
+        // Map nodes to their parents
+        let mut parents = HashMap::<ICoord, ICoord>::new();
+        let find_root = |pos: ICoord, parents: &HashMap<_, _>| {
+            let mut current = pos;
+            loop {
+                let parent = parents.get(&current);
+                if let Some(parent) = parent {
+                    current = *parent;
+                } else {
+                    return current;
+                }
+            }
+        };
+        let unite = |a: ICoord, b: ICoord, parents: &mut HashMap<_, _>| {
+            let root_a = find_root(a, parents);
+            let root_b = find_root(b, parents);
+            if root_a != root_b {
+                // apparently it's best to flip a coin to pick
+                if QuadRand.gen_bool(0.5) {
+                    parents.insert(root_a, root_b);
+                } else {
+                    parents.insert(root_b, root_a);
+                }
+            }
+        };
+
+        for (&pos, block) in self.stable_blocks.iter() {
+            // Only need to check left and down for matching
+            let links_down = self.stable_blocks.contains_key(&(pos + ICoord::new(0, 1)));
+            let neighbor_pos = pos + ICoord::new(1, 0);
+            let links_right = if let Some(neighbor) = self.stable_blocks.get(&neighbor_pos) {
+                matches!((
+                    &block.connectors[Direction4::East as usize],
+                    &neighbor.connectors[Direction4::West as usize],
+                ), (Some(a), Some(b)) if a.links_with(b))
+            } else {
+                false
+            };
+            if links_down || links_right {
+                unite(pos, neighbor_pos, &mut parents);
+            }
+        }
+        // Now, for each block, check if it has the same root as an anchor block
+        let anchor_roots = self
+            .stable_blocks
+            .iter()
+            .filter_map(|(pos, block)| {
+                if block.kind == BlockKind::Anchor {
+                    Some(find_root(*pos, &parents))
+                } else {
+                    None
+                }
+            })
+            .collect_vec();
+        let keys_to_remove = self
+            .stable_blocks
+            .iter()
+            .filter_map(|(pos, block)| {
+                let root = find_root(*pos, &parents);
+                if anchor_roots.contains(&root) {
+                    // nice keep this one
+                    None
+                } else {
+                    // die
+                    Some(*pos)
+                }
+            })
+            .collect_vec();
+
         for key in keys_to_remove {
             if let Some(block) = self.stable_blocks.remove(&key) {
                 self.falling_blocks.push(FallingBlock {
                     block,
                     x: key.x,
                     y: key.y as f32,
+                    time_alive: 0,
                 });
             }
             // else something funky happened...
@@ -126,7 +258,8 @@ impl ModePlaying {
         // do this stupid backwards dance because of borrow errors
         for idx in (0..self.falling_blocks.len()).rev() {
             let faller = self.falling_blocks.get_mut(idx).unwrap();
-            faller.y += FALL_VELOCITY;
+            faller.y +=
+                (0.5 * FALL_ACCELLERATION * faller.time_alive.pow(2) as f32).min(FALL_TERMINAL);
 
             if faller.y > (self.max_depth + BOTTOM_VIEW_SIZE * 2) as f32 {
                 self.falling_blocks.remove(idx);
@@ -139,39 +272,85 @@ impl ModePlaying {
                 // put it back in the map
                 let faller = self.falling_blocks.remove(idx);
                 self.stable_blocks.insert(rounded_pos, faller.block);
+                continue;
             }
+            faller.time_alive += 1;
         }
 
+        self.frames_elapsed += 1;
         Transition::None
     }
 
     fn handle_input(&mut self, globals: &mut Globals) {
         use macroquad::prelude::*;
 
-        let (mx, my) = mouse_position();
+        let (mx, my) = mouse_position_pixel();
+
         let scroll_y = mouse_wheel().1;
-        let hotzone_size = screen_height() * SCROLL_HOTZONE_SIZE;
-        if my < hotzone_size {
-            self.scroll_depth -= SCROLL_SPEED * (hotzone_size - my) / hotzone_size;
+        if my < SCROLL_HOTZONE_SIZE {
+            self.scroll_depth -= SCROLL_SPEED * (SCROLL_HOTZONE_SIZE - my) / SCROLL_HOTZONE_SIZE;
         }
-        if scroll_y > 0.0 {
+        if self.held.is_none() && scroll_y > 0.0 {
             // mouse wheel seems to only trigger every few frames so we speed it up;
             self.scroll_depth -= 2.0 * SCROLL_SPEED;
         }
-        if my > screen_height() - hotzone_size {
+        if my > HEIGHT - SCROLL_HOTZONE_SIZE {
             self.scroll_depth +=
-                SCROLL_SPEED * (my - screen_height() + hotzone_size) / hotzone_size;
+                SCROLL_SPEED * (my - HEIGHT + SCROLL_HOTZONE_SIZE) / SCROLL_HOTZONE_SIZE;
         }
-        if scroll_y < 0.0 {
+        if self.held.is_none() && scroll_y < 0.0 {
             self.scroll_depth += 2.0 * SCROLL_SPEED;
         }
         self.scroll_depth = self
             .scroll_depth
             .clamp(0.0, (self.max_depth + BOTTOM_VIEW_SIZE) as f32);
+
+        match &mut self.held {
+            None => {
+                if is_mouse_button_down(MouseButton::Left)
+                    && mx > WIDTH - 64.0
+                    && mx < WIDTH - 32.0
+                    && my > 40.0
+                    && my < 200.0
+                {
+                    // we're in the conveyor pickup zone
+                    let remainder = (CONVEYOR_Y_BOTTOM - my + BLOCK_SIZE) % 24.0;
+                    if remainder < 16.0 {
+                        let idx = ((CONVEYOR_Y_BOTTOM - my + BLOCK_SIZE) / 24.0) as usize;
+                        self.held = Some(HoldInfo { idx });
+                    }
+                }
+            }
+            Some(info) => {
+                if scroll_y > 0.0 {
+                    self.conveyor_blocks[info.idx].connectors.rotate_left(1);
+                } else if scroll_y < 0.0 {
+                    self.conveyor_blocks[info.idx].connectors.rotate_right(1);
+                }
+
+                if !is_mouse_button_down(MouseButton::Left) {
+                    let idx = info.idx;
+                    let blockpos = self.pixel_to_block(mx, my);
+                    if blockpos.x.abs() < CHASM_WIDTH / 2 + 1
+                        && blockpos.y >= 0
+                        && !self.stable_blocks.contains_key(&blockpos)
+                    {
+                        // poggers
+                        let block = self.conveyor_blocks.remove(idx);
+                        self.stable_blocks.insert(blockpos, block);
+                        self.conveyor_blocks.push(QuadRand.gen());
+                    }
+                    // in any case stop holding it
+                    self.held = None;
+                }
+            }
+        }
     }
 
     pub fn draw(&self, globals: &Globals) {
         use macroquad::prelude::*;
+
+        let (mx, my) = mouse_position_pixel();
 
         clear_background(BLUE);
 
@@ -224,14 +403,81 @@ impl ModePlaying {
             // TODO: don't draw blocks offscreen?
             block.draw_absolute(cx, cy, globals);
         }
+        for block in self.falling_blocks.iter() {
+            let fake_coord = ICoord::new(block.x, 0);
+            let (cx, _) = self.block_to_pixel(fake_coord);
+            let cy = (block.y - self.scroll_depth) * BLOCK_SIZE + HEIGHT / 2.0;
+            block.block.draw_absolute(cx, cy, globals);
+        }
 
-        draw_text(
-            format!("COM: {}; depth: {}", self.center_of_mass, self.max_depth).as_str(),
-            16.0,
-            16.0,
-            20.0,
+        // Draw the depth meter
+        let pixel_depth =
+            ((self.center_of_mass - self.scroll_depth) * BLOCK_SIZE + HEIGHT / 2.0).round();
+        draw_line(
+            BLOCK_SIZE * 2.0,
+            pixel_depth,
+            WIDTH + 10.0,
+            pixel_depth,
+            1.0,
+            drawutils::hexcolor(0xffee83aa),
+        );
+        let corner_x = BLOCK_SIZE * 2.0 - 16.0;
+        let corner_y = pixel_depth - 16.0;
+        draw_texture(
+            globals.assets.textures.depth_meter,
+            corner_x,
+            corner_y,
             WHITE,
         );
+
+        // Draw the number
+        let depth_string = format!("{:.0}", self.center_of_mass);
+        for (idx, c) in depth_string.chars().rev().enumerate() {
+            let cx = corner_x + 23.0 - (4 * idx) as f32;
+            let cy = corner_y + 13.0;
+
+            let sx = if let Some(digit) = c.to_digit(10) {
+                digit
+            } else if c == '-' {
+                10
+            } else {
+                // hmm
+                continue;
+            };
+            let sx = sx as f32 * 3.0;
+
+            draw_texture_ex(
+                globals.assets.textures.number_atlas,
+                cx,
+                cy,
+                WHITE,
+                DrawTextureParams {
+                    source: Some(Rect::new(sx, 0.0, 3.0, 5.0)),
+                    ..Default::default()
+                },
+            );
+        }
+
+        // Draw the conveyor
+        draw_texture(globals.assets.textures.conveyor, WIDTH - 70.0, 0.0, WHITE);
+        for (idx, block) in self.conveyor_blocks.iter().enumerate() {
+            let (cx, cy, color) = if matches!(&self.held, Some(held) if held.idx == idx) {
+                let blockpos = self.pixel_to_block(mx, my);
+                if blockpos.x.abs() < CHASM_WIDTH / 2 + 1 && blockpos.y >= 0 {
+                    // we're inside!
+                    let (cx, cy) = self.block_to_pixel(blockpos);
+                    (cx, cy, Color::new(1.0, 1.0, 1.0, 0.8))
+                } else {
+                    (mx, my, Color::new(1.0, 1.0, 1.0, 0.7))
+                }
+            } else {
+                let cx = WIDTH - 70.0 + 24.0 + BLOCK_SIZE / 2.0;
+                let cy = CONVEYOR_Y_BOTTOM - idx as f32 * 24.0 + BLOCK_SIZE / 2.0;
+                (cx, cy, WHITE)
+            };
+
+            block.draw_absolute_color(cx, cy, color, globals);
+        }
     }
 
     /// Check if a connector here facing in the specified direction would connect
@@ -275,4 +521,16 @@ impl ModePlaying {
         let cy = (pos.y as f32 - self.scroll_depth) * BLOCK_SIZE + HEIGHT / 2.0;
         (cx, cy)
     }
+
+    fn pixel_to_block(&self, x: f32, y: f32) -> ICoord {
+        let block_x = (x / BLOCK_SIZE).round() as isize - SCREEN_WIDTH / 2;
+        let block_y = (y / BLOCK_SIZE - 0.5).round() as isize - SCREEN_HEIGHT / 2
+            + self.scroll_depth.round() as isize;
+        ICoord::new(block_x, block_y)
+    }
+}
+
+#[derive(Clone)]
+struct HoldInfo {
+    idx: usize,
 }

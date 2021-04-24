@@ -31,10 +31,15 @@ pub struct Textures {
     pub solid: Texture2D,
     pub anchor: Texture2D,
     pub connector_atlas: Texture2D,
+    pub damage_atlas: Texture2D,
 
     pub dark_dirt: Texture2D,
     pub dirt_edge: Texture2D,
     pub dirt_body: Texture2D,
+
+    pub conveyor: Texture2D,
+    pub depth_meter: Texture2D,
+    pub number_atlas: Texture2D,
 }
 
 impl Textures {
@@ -46,10 +51,15 @@ impl Textures {
             solid: texture("rust2").await,
             anchor: texture("terrain-iron-simple-bottom").await,
             connector_atlas: texture("connector_atlas").await,
+            damage_atlas: texture("damage_atlas").await,
 
             dark_dirt: texture("dirt").await,
             dirt_edge: texture("reinforced_dirt").await,
             dirt_body: texture("dirt_back").await,
+
+            conveyor: texture("conveyor").await,
+            depth_meter: texture("depth_meter").await,
+            number_atlas: texture("number_atlas").await,
         }
     }
 }

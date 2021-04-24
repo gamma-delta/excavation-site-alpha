@@ -117,17 +117,7 @@ async fn main() {
 
         // Figure out the drawbox.
         // these are how much wider/taller the window is than the content
-        let (width_deficit, height_deficit) = if (screen_width() / screen_height()) > ASPECT_RATIO {
-            // it's too wide! put bars on the sides!
-            // the height becomes the authority on how wide to draw
-            let expected_width = screen_height() * ASPECT_RATIO;
-            (screen_width() - expected_width, 0.0f32)
-        } else {
-            // it's too tall! put bars on the ends!
-            // the width is the authority
-            let expected_height = screen_width() / ASPECT_RATIO;
-            (0.0f32, screen_height() - expected_height)
-        };
+        let (width_deficit, height_deficit) = wh_deficit();
         draw_texture_ex(
             canvas.texture,
             width_deficit / 2.0,
@@ -184,5 +174,19 @@ impl Globals {
             assets: Assets::init().await,
             frames_ran: 0,
         }
+    }
+}
+
+fn wh_deficit() -> (f32, f32) {
+    if (screen_width() / screen_height()) > ASPECT_RATIO {
+        // it's too wide! put bars on the sides!
+        // the height becomes the authority on how wide to draw
+        let expected_width = screen_height() * ASPECT_RATIO;
+        (screen_width() - expected_width, 0.0f32)
+    } else {
+        // it's too tall! put bars on the ends!
+        // the width is the authority
+        let expected_height = screen_width() / ASPECT_RATIO;
+        (0.0f32, screen_height() - expected_height)
     }
 }
