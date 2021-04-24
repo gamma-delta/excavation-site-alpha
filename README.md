@@ -1,9 +1,12 @@
-# Megaquad
+# Excavation Site Alpha
 
-A framework for making games using Macroquad.
+Drag blocks off the conveyor belt with your mouse and match up the connectors. Rotate them with the scroll wheel.
+Get your center of mass as deep as possible.
 
-After writing maybe 5 games and finding myself always going to the previous project to copy-paste code
-I decided I was about done with that and I should make a template.
+Blocks get damaged over time from the stress. If you have a line of blocks all the way across the chasm,
+they get damaged much less. If a cluster of blocks isn't attached to an anchor it will fall.
 
-This code displays a logo screen! I've decided to rebrand my game making stuff to Falling Colors.
-As discussed in the license, you can use the code but please don't steal the assets.
+You might occasionally get a new anchor point to embed in the wall of the chasm.
+You can only place it right below another anchor or connect it to a block already by the wall.
+
+Click on scaffolding blocks to damage them. (Why? You'll see.)
