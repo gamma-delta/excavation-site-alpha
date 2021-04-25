@@ -1,12 +1,15 @@
 # Excavation Site Alpha
 
-Drag blocks off the conveyor belt with your mouse and match up the connectors. Rotate them with the scroll wheel.
-Get your center of mass as deep as possible.
+Match up block edges and get your center of mass as low as possible. World of Goo meets dominoes!
 
-Blocks get damaged over time from the stress. If you have a line of blocks all the way across the chasm,
-they get damaged much less. If a cluster of blocks isn't attached to an anchor it will fall.
+![2.png](https://raw.githubusercontent.com/gamma-delta/ludum-dare-48/main/screenshots/2.png)
 
-You might occasionally get a new anchor point to embed in the wall of the chasm.
-You can only place it right below another anchor or connect it to a block already by the wall.
+- Drag blocks off the conveyor belt and onto your structure. Get your center of mass as low as you can with 100 blocks.
+- Blocks with matching edges stick to each other.
+- Scaffolding is lighter than Plates and affects your center of mass less.
+- Blocks wear out and break over time. You can damage scaffolding by clicking on it.
+- Free-floating blocks will fall off your structure, but you can catch them with blocks below...
+- You can embed new anchor points in the wall, but only if you already have a block adjacent for it to match with.
+- If you build a whole line of blocks across the chasm, they will wear out much slower.
 
-Click on scaffolding blocks to damage them. (Why? You'll see.)
+Try and beat my high score of 57!
