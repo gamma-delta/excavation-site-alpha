@@ -282,9 +282,14 @@ impl ModePlaying {
             if let Some(diff) = remove_this {
                 // noice
                 let chunk = self.falling_blocks.remove(chunk_idx);
-                for faller in chunk {
-                    let pos = ICoord::new(faller.x, faller.y as isize - diff);
-                    self.stable_blocks.entry(pos).or_insert(faller.block);
+                'block: for faller in chunk {
+                    for cheat_up in 0..20 {
+                        let pos = ICoord::new(faller.x, faller.y as isize - diff - cheat_up);
+                        if !self.stable_blocks.contains_key(&pos) {
+                            self.stable_blocks.insert(pos, faller.block);
+                            continue 'block;
+                        }
+                    }
                 }
             }
         }

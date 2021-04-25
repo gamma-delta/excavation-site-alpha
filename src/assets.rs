@@ -26,6 +26,8 @@ impl Assets {
 #[derive(Clone)]
 pub struct Textures {
     pub title_banner: Texture2D,
+    pub title_screen: Texture2D,
+    pub tutorial: Texture2D,
 
     pub scaffold: Texture2D,
     pub solid: Texture2D,
@@ -46,6 +48,8 @@ impl Textures {
     async fn init() -> Self {
         Self {
             title_banner: texture("title/banner").await,
+            title_screen: texture("titlescreen").await,
+            tutorial: texture("tutorial").await,
 
             scaffold: texture("scaffold").await,
             solid: texture("rust2").await,

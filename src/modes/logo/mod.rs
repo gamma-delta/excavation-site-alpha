@@ -7,7 +7,7 @@ use crate::{drawutils, Gamemode, Globals, Transition, HEIGHT, WIDTH};
 
 use std::f32::consts::TAU;
 
-use super::ModePlaying;
+use super::{ModePlaying, ModeTitle};
 
 const ROTATION_SPEED: f32 = 0.03;
 /// Number of "blades" of the starburst
@@ -33,7 +33,7 @@ impl ModeLogo {
             Transition::None
         } else {
             stop_sound(globals.assets.sounds.title_jingle);
-            Transition::Swap(Gamemode::Playing(ModePlaying::new()))
+            Transition::Swap(Gamemode::Title(ModeTitle::new()))
         };
 
         self.frames_ran += 1;

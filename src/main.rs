@@ -6,7 +6,7 @@ mod modes;
 mod random;
 
 use assets::Assets;
-use modes::{ModeLogo, ModePlaying};
+use modes::{ModeLogo, ModePlaying, ModeRules, ModeTitle};
 
 use macroquad::prelude::*;
 
@@ -66,6 +66,8 @@ async fn main() {
             // To change state, return a non-None transition.
             let transition = match mode_stack.last_mut().unwrap() {
                 Gamemode::Logo(mode) => mode.update(&mut globals),
+                Gamemode::Title(mode) => mode.update(&mut globals),
+                Gamemode::Rules(mode) => mode.update(&mut globals),
                 Gamemode::Playing(mode) => mode.update(&mut globals),
             };
             match transition {
@@ -107,6 +109,8 @@ async fn main() {
         // Also do audio in the draw method, I guess, it doesn't really matter where you do it...
         match mode {
             Gamemode::Logo(mode) => mode.draw(&globals),
+            Gamemode::Title(mode) => mode.draw(&globals),
+            Gamemode::Rules(mode) => mode.draw(&globals),
             Gamemode::Playing(mode) => mode.draw(&globals),
         }
 
@@ -143,6 +147,8 @@ async fn main() {
 #[derive(Clone)]
 pub enum Gamemode {
     Logo(ModeLogo),
+    Title(ModeTitle),
+    Rules(ModeRules),
     Playing(ModePlaying),
 }
 
