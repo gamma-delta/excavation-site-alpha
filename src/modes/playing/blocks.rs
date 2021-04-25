@@ -162,10 +162,10 @@ impl Distribution<Block> for Standard {
 }
 
 #[derive(Clone, Debug)]
-pub struct FallingBlock {
-    pub block: Block,
-    pub x: isize,
-    pub y: f32,
+pub struct FallingBlockChunk {
+    /// Has the original coordinates
+    pub blocks: Vec<(ICoord, Block)>,
+    pub dy: f32,
     pub time_alive: u64,
 }
 

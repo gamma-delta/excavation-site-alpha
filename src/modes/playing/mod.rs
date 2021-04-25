@@ -1,6 +1,6 @@
 mod blocks;
 
-use self::blocks::{Block, BlockKind, Connector, FallingBlock};
+use self::blocks::{Block, BlockKind, Connector, FallingBlockChunk};
 use crate::{drawutils, Globals, Transition, HEIGHT, WIDTH};
 
 use cogs_gamedev::{directions::Direction4, int_coords::ICoord};
@@ -52,7 +52,7 @@ pub struct ModePlaying {
     stable_blocks: HashMap<ICoord, Block>,
     /// Blocks visually falling right now.
     /// Each entry is a clump of together-falling blocks.
-    falling_blocks: Vec<Vec<FallingBlock>>,
+    falling_blocks: Vec<FallingBlockChunk>,
     /// Blocks in the conveyor on the side
     conveyor_blocks: Vec<Block>,
     /// Index in the conveyor of the block being held by the player right now
@@ -236,59 +236,63 @@ impl ModePlaying {
             .collect_vec();
         self.audio.fall = !falling_chunk.is_empty();
 
-        let falling_chunk = falling_chunk
-            .into_iter()
-            .map(|(pos, block)| {
-                // if we do it at least once set the fall
-                self.audio.fall = true;
-                FallingBlock {
-                    block,
-                    x: pos.x,
-                    y: pos.y as f32,
-                    time_alive: 0,
-                }
-            })
-            .collect_vec();
-        println!("{:?}", &falling_chunk);
+        let falling_chunk = FallingBlockChunk {
+            blocks: falling_chunk,
+            dy: 0.0,
+            time_alive: 0,
+        };
         self.falling_blocks.push(falling_chunk);
 
         // Update falling blocks
         // do this stupid backwards dance because of borrow errors
         for chunk_idx in (0..self.falling_blocks.len()).rev() {
             let chunk = self.falling_blocks.get_mut(chunk_idx).unwrap();
-            let mut remove_this = None;
-            'block: for faller_idx in (0..chunk.len()).rev() {
-                let faller = chunk.get_mut(faller_idx).unwrap();
-                let original_y = faller.y;
-                faller.y += (FALL_ACCELLERATION * faller.time_alive as f32).min(FALL_TERMINAL);
-                let delta = faller.y as isize - (original_y as isize - 1);
+            let original_dy = chunk.dy;
+            chunk.dy += (FALL_ACCELLERATION * chunk.time_alive as f32).min(FALL_TERMINAL);
+            // Record how many blocks we fell past.
+            let delta = chunk.dy as isize - (original_dy as isize - 1);
+            chunk.time_alive += 1;
+
+            enum Removal {
+                Keep,
+                Delete,
+                InsertWithDelta(isize),
+            }
+
+            let mut removal = Removal::Keep;
+            'block: for faller_idx in (0..chunk.blocks.len()).rev() {
+                let (pos, block) = chunk.blocks.get_mut(faller_idx).unwrap();
+                // Starting down and moving up, check everything we fell past
                 for diff in 0..delta {
-                    let passed_y = faller.y as isize - diff;
+                    let passed_y = pos.y + chunk.dy as isize - diff;
                     if passed_y > (self.max_depth + BOTTOM_VIEW_SIZE * 2) {
-                        chunk.remove(faller_idx);
-                        continue 'block;
+                        removal = Removal::Delete;
+                        break 'block;
                     }
 
-                    let rounded_pos = ICoord::new(faller.x, passed_y);
-                    let links = Self::is_stable(&self.stable_blocks, rounded_pos, &faller.block);
+                    let rounded_pos = ICoord::new(pos.x, passed_y);
+                    let links = Self::is_stable(&self.stable_blocks, rounded_pos, &block);
                     if links {
-                        remove_this = Some(diff);
+                        // we link up here with this offset!
+                        removal = Removal::InsertWithDelta(chunk.dy as isize - diff);
                         break 'block;
                     }
                 }
-
-                faller.time_alive += 1;
             }
 
-            if let Some(diff) = remove_this {
-                // noice
-                let chunk = self.falling_blocks.remove(chunk_idx);
-                'block2: for faller in chunk {
-                    for cheat_up in 0..20 {
-                        let pos = ICoord::new(faller.x, faller.y as isize - diff - cheat_up);
-                        if !self.stable_blocks.contains_key(&pos) {
-                            self.stable_blocks.insert(pos, faller.block);
-                            continue 'block2;
+            match removal {
+                Removal::Keep => {}
+                Removal::Delete => {
+                    self.falling_blocks.remove(chunk_idx);
+                }
+                Removal::InsertWithDelta(delta) => {
+                    let chunk = self.falling_blocks.remove(chunk_idx);
+                    for (pos, block) in chunk.blocks {
+                        let adj_pos = pos + ICoord::new(0, delta);
+                        if !self.stable_blocks.contains_key(&adj_pos) {
+                            self.stable_blocks.insert(adj_pos, block);
+                        } else {
+                            println!("voided {:?}", &block);
                         }
                     }
                 }
@@ -481,11 +485,11 @@ impl ModePlaying {
             block.draw_absolute(cx, cy, globals);
         }
         for chunk in self.falling_blocks.iter() {
-            for block in chunk.iter() {
-                let fake_coord = ICoord::new(block.x, 0);
+            for (pos, block) in chunk.blocks.iter() {
+                let fake_coord = ICoord::new(pos.x, 0);
                 let (cx, _) = self.block_to_pixel(fake_coord);
-                let cy = (block.y - self.scroll_depth) * BLOCK_SIZE + HEIGHT / 2.0;
-                block.block.draw_absolute(cx, cy, globals);
+                let cy = (pos.y as f32 + chunk.dy - self.scroll_depth) * BLOCK_SIZE + HEIGHT / 2.0;
+                block.draw_absolute(cx, cy, globals);
             }
         }
 
