@@ -464,13 +464,21 @@ impl ModePlaying {
                     (globals.assets.textures.dirt_body, rot)
                 };
 
+                // Based on the block position, get darker as we go deeper
+                let pos_hash = ((row ^ col) as f64).powi(2).sin() as f32;
+                let depth_mod = 50.0;
+                let darkness = depth_mod / (-row as f32 - depth_mod) + 1.0;
+                let lightness = 1.0 - darkness + pos_hash * 0.2;
+                let lightness = (lightness * 100.0).round() / 100.0;
+                let col = Color::new(lightness, lightness, lightness, 1.0);
+
                 let center_x = x_idx as f32 * BLOCK_SIZE;
                 let center_y = (y_idx as f32 - deficit) * BLOCK_SIZE;
                 draw_texture_ex(
                     tex,
                     center_x - BLOCK_SIZE / 2.0,
                     center_y - BLOCK_SIZE / 2.0,
-                    WHITE,
+                    col,
                     DrawTextureParams {
                         rotation: rot,
                         ..Default::default()
