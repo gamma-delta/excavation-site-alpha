@@ -67,12 +67,26 @@ impl Textures {
 #[derive(Clone)]
 pub struct Sounds {
     pub title_jingle: Sound,
+    pub engineer_gaming: Sound,
+
+    pub pickup: Sound,
+    pub putdown: Sound,
+    pub rotate: Sound,
+    pub damage: Sound,
+    pub fall: Sound,
 }
 
 impl Sounds {
     async fn init() -> Self {
         Self {
             title_jingle: sound("title/jingle").await,
+            engineer_gaming: sound("engineer_gaming").await,
+
+            pickup: sound("pick_up").await,
+            putdown: sound("drop").await,
+            rotate: sound("rotate").await,
+            damage: sound("break").await,
+            fall: sound("fall").await,
         }
     }
 }

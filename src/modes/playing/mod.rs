@@ -25,9 +25,8 @@ const SCREEN_HEIGHT: isize = (HEIGHT / BLOCK_SIZE) as isize;
 /// The number of tiles you can look after the last tile
 const BOTTOM_VIEW_SIZE: isize = SCREEN_HEIGHT / 2;
 
-const FALL_ACCELLERATION: f32 = 1.0 / 60.0 / 60.0;
-// If this were more than 1 the block could skip through others
-const FALL_TERMINAL: f32 = 0.9;
+const FALL_ACCELLERATION: f32 = 1.0 / 60.0;
+const FALL_TERMINAL: f32 = 0.5;
 
 const BLOCK_SIZE: f32 = 16.0;
 
@@ -51,8 +50,9 @@ const BREAK_TIMER: u64 = 60;
 pub struct ModePlaying {
     /// Maps coordinates to whatever block is there.
     stable_blocks: HashMap<ICoord, Block>,
-    /// Blocks visually falling right now
-    falling_blocks: Vec<FallingBlock>,
+    /// Blocks visually falling right now.
+    /// Each entry is a clump of together-falling blocks.
+    falling_blocks: Vec<Vec<FallingBlock>>,
     /// Blocks in the conveyor on the side
     conveyor_blocks: Vec<Block>,
     /// Index in the conveyor of the block being held by the player right now
@@ -66,6 +66,8 @@ pub struct ModePlaying {
     max_depth: isize,
     /// Cached center of mass
     center_of_mass: f32,
+
+    audio: AudioSignals,
 
     frames_elapsed: u64,
 }
@@ -110,11 +112,13 @@ impl ModePlaying {
             scroll_depth: 0.0,
             max_depth: 0,
             center_of_mass: 0.0,
+            audio: AudioSignals::default(),
             frames_elapsed: 0,
         }
     }
 
     pub fn update(&mut self, globals: &mut Globals) -> Transition {
+        self.audio = AudioSignals::default();
         self.handle_input(globals);
 
         // Damage blocks and record stats
@@ -180,6 +184,7 @@ impl ModePlaying {
                 let block = occupied.get_mut();
                 if self.frames_elapsed % BREAK_TIMER == 0 && QuadRand.gen_bool(chance) {
                     block.damage += 1;
+                    self.audio.damage = true;
                 }
                 if block.damage > block.resilience() {
                     // die
@@ -224,39 +229,64 @@ impl ModePlaying {
                 }
             }
         }
-        for (pos, block) in self
+
+        let falling_chunk = self
             .stable_blocks
             .drain_filter(|pos, _| !stable_poses.contains(pos))
-        {
-            self.falling_blocks.push(FallingBlock {
-                block,
-                x: pos.x,
-                y: pos.y as f32,
-                time_alive: 0,
-            });
-        }
+            .collect_vec();
+        self.audio.fall = !falling_chunk.is_empty();
+
+        let falling_chunk = falling_chunk
+            .into_iter()
+            .map(|(pos, block)| {
+                // if we do it at least once set the fall
+                self.audio.fall = true;
+                FallingBlock {
+                    block,
+                    x: pos.x,
+                    y: pos.y as f32,
+                    time_alive: 0,
+                }
+            })
+            .collect_vec();
+        self.falling_blocks.push(falling_chunk);
 
         // Update falling blocks
         // do this stupid backwards dance because of borrow errors
-        for idx in (0..self.falling_blocks.len()).rev() {
-            let faller = self.falling_blocks.get_mut(idx).unwrap();
-            faller.y +=
-                (0.5 * FALL_ACCELLERATION * faller.time_alive.pow(2) as f32).min(FALL_TERMINAL);
+        for chunk_idx in (0..self.falling_blocks.len()).rev() {
+            let chunk = self.falling_blocks.get_mut(chunk_idx).unwrap();
+            let mut remove_this = None;
+            'block: for faller_idx in (0..chunk.len()).rev() {
+                let faller = chunk.get_mut(faller_idx).unwrap();
+                let original_y = faller.y;
+                faller.y += (FALL_ACCELLERATION * faller.time_alive as f32).min(FALL_TERMINAL);
+                let delta = faller.y as isize - (original_y as isize - 1);
+                for diff in 0..delta {
+                    let passed_y = faller.y as isize - diff;
+                    if passed_y > (self.max_depth + BOTTOM_VIEW_SIZE * 2) {
+                        chunk.remove(faller_idx);
+                        continue 'block;
+                    }
 
-            if faller.y > (self.max_depth + BOTTOM_VIEW_SIZE * 2) as f32 {
-                self.falling_blocks.remove(idx);
-                continue;
+                    let rounded_pos = ICoord::new(faller.x, passed_y);
+                    let links = Self::is_stable(&self.stable_blocks, rounded_pos, &faller.block);
+                    if links {
+                        remove_this = Some(diff);
+                        break 'block;
+                    }
+                }
+
+                faller.time_alive += 1;
             }
 
-            let rounded_pos = ICoord::new(faller.x, faller.y.floor() as isize);
-            let links = Self::is_stable(&self.stable_blocks, rounded_pos, &faller.block);
-            if links && !self.stable_blocks.contains_key(&rounded_pos) {
-                // put it back in the map
-                let faller = self.falling_blocks.remove(idx);
-                self.stable_blocks.insert(rounded_pos, faller.block);
-                continue;
+            if let Some(diff) = remove_this {
+                // noice
+                let chunk = self.falling_blocks.remove(chunk_idx);
+                for faller in chunk {
+                    let pos = ICoord::new(faller.x, faller.y as isize - diff);
+                    self.stable_blocks.entry(pos).or_insert(faller.block);
+                }
             }
-            faller.time_alive += 1;
         }
 
         self.frames_elapsed += 1;
@@ -300,6 +330,7 @@ impl ModePlaying {
                     if remainder < 16.0 {
                         let idx = ((CONVEYOR_Y_BOTTOM - my + BLOCK_SIZE) / 24.0) as usize;
                         self.held = Some(HoldInfo { idx });
+                        self.audio.pick_up = true;
                     }
                 }
 
@@ -308,6 +339,7 @@ impl ModePlaying {
                     match self.stable_blocks.get_mut(&blockpos) {
                         Some(block) if block.is_removable() => {
                             block.damage += 1;
+                            self.audio.damage = true;
                         }
                         _ => {}
                     }
@@ -316,8 +348,10 @@ impl ModePlaying {
             Some(info) => {
                 if scroll_y > 0.0 {
                     self.conveyor_blocks[info.idx].connectors.rotate_left(1);
+                    self.audio.rotate = true;
                 } else if scroll_y < 0.0 {
                     self.conveyor_blocks[info.idx].connectors.rotate_right(1);
+                    self.audio.rotate = true;
                 }
 
                 if !is_mouse_button_down(MouseButton::Left) {
@@ -338,6 +372,9 @@ impl ModePlaying {
                         let block = self.conveyor_blocks.remove(idx);
                         self.stable_blocks.insert(blockpos, block);
                         self.conveyor_blocks.push(QuadRand.gen());
+                        self.audio.put_down = true;
+                    } else {
+                        self.audio.rotate = true;
                     }
                     // in any case stop holding it
                     self.held = None;
@@ -347,7 +384,42 @@ impl ModePlaying {
     }
 
     pub fn draw(&self, globals: &Globals) {
-        use macroquad::prelude::*;
+        use macroquad::{audio::*, prelude::*};
+
+        if self.frames_elapsed == 0 {
+            play_sound(
+                globals.assets.sounds.engineer_gaming,
+                PlaySoundParams {
+                    looped: true,
+                    volume: 0.7,
+                },
+            );
+        }
+        let mut sounds = vec![];
+        if self.audio.damage {
+            sounds.push(globals.assets.sounds.damage);
+        }
+        if self.audio.fall {
+            sounds.push(globals.assets.sounds.fall);
+        }
+        if self.audio.pick_up {
+            sounds.push(globals.assets.sounds.pickup);
+        }
+        if self.audio.put_down {
+            sounds.push(globals.assets.sounds.putdown);
+        }
+        if self.audio.rotate {
+            sounds.push(globals.assets.sounds.rotate);
+        }
+        for sound in sounds {
+            play_sound(
+                sound,
+                PlaySoundParams {
+                    looped: false,
+                    volume: 1.0,
+                },
+            );
+        }
 
         let (mx, my) = mouse_position_pixel();
 
@@ -402,11 +474,13 @@ impl ModePlaying {
             // TODO: don't draw blocks offscreen?
             block.draw_absolute(cx, cy, globals);
         }
-        for block in self.falling_blocks.iter() {
-            let fake_coord = ICoord::new(block.x, 0);
-            let (cx, _) = self.block_to_pixel(fake_coord);
-            let cy = (block.y - self.scroll_depth) * BLOCK_SIZE + HEIGHT / 2.0;
-            block.block.draw_absolute(cx, cy, globals);
+        for chunk in self.falling_blocks.iter() {
+            for block in chunk.iter() {
+                let fake_coord = ICoord::new(block.x, 0);
+                let (cx, _) = self.block_to_pixel(fake_coord);
+                let cy = (block.y - self.scroll_depth) * BLOCK_SIZE + HEIGHT / 2.0;
+                block.block.draw_absolute(cx, cy, globals);
+            }
         }
 
         // Draw the depth meter
@@ -554,4 +628,13 @@ impl ModePlaying {
 #[derive(Clone)]
 struct HoldInfo {
     idx: usize,
+}
+
+#[derive(Clone, Default)]
+struct AudioSignals {
+    pick_up: bool,
+    rotate: bool,
+    fall: bool,
+    put_down: bool,
+    damage: bool,
 }
