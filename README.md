@@ -13,3 +13,7 @@ Match up block edges and get your center of mass as low as possible. World of Go
 - If you build a whole line of blocks across the chasm, they will wear out much slower.
 
 Try and beat my high score of 57!
+
+[Rate the game here!](https://ldjam.com/events/ludum-dare/48/excavation-site-alpha/edit)
+
+[Play the game here!](https://gamma-delta.itch.io/excavation-site-alpha)
