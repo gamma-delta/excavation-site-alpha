@@ -26,7 +26,7 @@ fn window_conf() -> Conf {
         window_title: if cfg!(debug_assertions) {
             concat!(env!("CARGO_CRATE_NAME"), " v", env!("CARGO_PKG_VERSION"))
         } else {
-            "Lunar State"
+            "Excavation Site Alpha"
         }
         .to_owned(),
         fullscreen: false,

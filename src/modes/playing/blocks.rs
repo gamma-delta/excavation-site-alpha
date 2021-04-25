@@ -9,7 +9,7 @@ use rand::{
     Rng,
 };
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Block {
     /// Maps `Direction4 as usize` to the connector
     pub connectors: [Option<Connector>; 4],
@@ -22,7 +22,7 @@ impl Block {
         match self.kind {
             BlockKind::Scaffold => 1.0,
             BlockKind::Solid => 5.0,
-            BlockKind::Anchor => 1.0,
+            BlockKind::Anchor => 0.0,
         }
     }
 
@@ -161,7 +161,7 @@ impl Distribution<Block> for Standard {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct FallingBlock {
     pub block: Block,
     pub x: isize,
@@ -169,7 +169,7 @@ pub struct FallingBlock {
     pub time_alive: u64,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Connector {
     pub shape: ConnectorShape,
     pub sticks_out: bool,
@@ -191,7 +191,7 @@ impl Distribution<Connector> for Standard {
 }
 
 /// The shape of the connector on the side of the block
-#[derive(Copy, Clone, PartialEq, Eq)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum ConnectorShape {
     Square,
     Round,
@@ -212,7 +212,7 @@ impl Distribution<ConnectorShape> for Standard {
     }
 }
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub enum BlockKind {
     Scaffold,
     Solid,

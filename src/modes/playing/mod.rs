@@ -249,6 +249,7 @@ impl ModePlaying {
                 }
             })
             .collect_vec();
+        println!("{:?}", &falling_chunk);
         self.falling_blocks.push(falling_chunk);
 
         // Update falling blocks
@@ -282,12 +283,12 @@ impl ModePlaying {
             if let Some(diff) = remove_this {
                 // noice
                 let chunk = self.falling_blocks.remove(chunk_idx);
-                'block: for faller in chunk {
+                'block2: for faller in chunk {
                     for cheat_up in 0..20 {
                         let pos = ICoord::new(faller.x, faller.y as isize - diff - cheat_up);
                         if !self.stable_blocks.contains_key(&pos) {
                             self.stable_blocks.insert(pos, faller.block);
-                            continue 'block;
+                            continue 'block2;
                         }
                     }
                 }
