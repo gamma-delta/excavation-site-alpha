@@ -6,15 +6,9 @@ mod modes;
 mod random;
 
 use assets::Assets;
-use modes::{ModeLogo, ModePlaying, ModeRules, ModeTitle};
+use modes::{ModeDenoument, ModeLogo, ModePlaying, ModeRules, ModeTitle};
 
 use macroquad::prelude::*;
-
-use std::{
-    sync::{Arc, Barrier},
-    thread,
-    time::{Duration, Instant},
-};
 
 const WIDTH: f32 = 320.0;
 const HEIGHT: f32 = 240.0;
@@ -37,65 +31,14 @@ fn window_conf() -> Conf {
 
 #[macroquad::main(window_conf)]
 async fn main() {
-    let time = Instant::now();
-
-    // The engine is multithreaded.
-    // Given a state S0, updating to S1 and drawing S0 happens at the same time.
-    // The state is sent down here
-    let (draw_tx, draw_rx) = crossbeam::channel::bounded(0);
-    // This barrier makes sure both threads finish their computation before going to the next frame
-    let frame_barrier = Arc::new(Barrier::new(2));
-    let draw_frame_barrier = frame_barrier.clone();
-
     // Drawing must happen on the main thread (thanks macroquad...)
     // so updating goes over here
     let mut globals = Globals::new().await;
     let mut mode_stack = vec![Gamemode::Logo(ModeLogo::new())];
-    let _update_handle = thread::spawn(move || {
-        // Seed the RNG now
-        let dur = time.elapsed();
-        macroquad::rand::srand(dur.as_nanos() as u64);
-
-        loop {
-            // Clone the current state and send it off for drawing
-            draw_tx
-                .send((mode_stack.last().unwrap().clone(), globals.clone()))
-                .unwrap();
-
-            // Update the current state.
-            // To change state, return a non-None transition.
-            let transition = match mode_stack.last_mut().unwrap() {
-                Gamemode::Logo(mode) => mode.update(&mut globals),
-                Gamemode::Title(mode) => mode.update(&mut globals),
-                Gamemode::Rules(mode) => mode.update(&mut globals),
-                Gamemode::Playing(mode) => mode.update(&mut globals),
-            };
-            match transition {
-                Transition::None => {}
-                Transition::Push(new_mode) => mode_stack.push(new_mode),
-                Transition::Pop => {
-                    if mode_stack.len() >= 2 {
-                        mode_stack.pop();
-                    }
-                }
-                Transition::Swap(new_mode) => {
-                    if !mode_stack.is_empty() {
-                        mode_stack.pop();
-                    }
-                    mode_stack.push(new_mode)
-                }
-            }
-
-            globals.frames_ran += 1;
-            frame_barrier.wait();
-        }
-    });
 
     let canvas = render_target(WIDTH as u32, HEIGHT as u32);
     canvas.texture.set_filter(FilterMode::Nearest);
     loop {
-        let (mode, globals) = draw_rx.recv().unwrap();
-
         // These divides and multiplies are required to get the camera in the center of the screen
         // and having it fill everything.
         set_camera(&Camera2D {
@@ -107,11 +50,12 @@ async fn main() {
         clear_background(WHITE);
         // Draw the state.
         // Also do audio in the draw method, I guess, it doesn't really matter where you do it...
-        match mode {
+        match mode_stack.last().unwrap() {
             Gamemode::Logo(mode) => mode.draw(&globals),
             Gamemode::Title(mode) => mode.draw(&globals),
             Gamemode::Rules(mode) => mode.draw(&globals),
             Gamemode::Playing(mode) => mode.draw(&globals),
+            Gamemode::Denoument(mode) => mode.draw(&globals),
         }
 
         // Done rendering to the canvas; go back to our normal camera
@@ -135,8 +79,33 @@ async fn main() {
                 ..Default::default()
             },
         );
+        // Update the current state.
+        // To change state, return a non-None transition.
+        let transition = match mode_stack.last_mut().unwrap() {
+            Gamemode::Logo(mode) => mode.update(&mut globals),
+            Gamemode::Title(mode) => mode.update(&mut globals),
+            Gamemode::Rules(mode) => mode.update(&mut globals),
+            Gamemode::Playing(mode) => mode.update(&mut globals),
+            Gamemode::Denoument(mode) => mode.update(&mut globals),
+        };
+        match transition {
+            Transition::None => {}
+            Transition::Push(new_mode) => mode_stack.push(new_mode),
+            Transition::Pop => {
+                if mode_stack.len() >= 2 {
+                    mode_stack.pop();
+                }
+            }
+            Transition::Swap(new_mode) => {
+                if !mode_stack.is_empty() {
+                    mode_stack.pop();
+                }
+                mode_stack.push(new_mode)
+            }
+        }
 
-        draw_frame_barrier.wait();
+        globals.frames_ran += 1;
+
         next_frame().await
     }
 }
@@ -150,6 +119,7 @@ pub enum Gamemode {
     Title(ModeTitle),
     Rules(ModeRules),
     Playing(ModePlaying),
+    Denoument(ModeDenoument),
 }
 
 /// Ways modes can transition

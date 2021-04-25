@@ -6,3 +6,5 @@ mod title;
 pub use title::ModeTitle;
 mod rules;
 pub use rules::ModeRules;
+mod denoument;
+pub use denoument::ModeDenoument;

@@ -1,13 +1,13 @@
 mod blocks;
 
 use self::blocks::{Block, BlockKind, Connector, FallingBlockChunk};
-use crate::{drawutils, Globals, Transition, HEIGHT, WIDTH};
+use crate::{drawutils, Gamemode, Globals, ModeDenoument, Transition, HEIGHT, WIDTH};
 
 use cogs_gamedev::{directions::Direction4, int_coords::ICoord};
 use drawutils::mouse_position_pixel;
 use itertools::Itertools;
 use quad_rand::compat::QuadRand;
-use rand::Rng;
+use rand::{rngs::SmallRng, Rng, SeedableRng};
 
 use std::{
     collections::{hash_map::Entry, HashMap, HashSet},
@@ -46,6 +46,8 @@ const BREAK_CHANCES: [f64; 5] = [
 ];
 const BREAK_TIMER: u64 = 60;
 
+const BLOCK_ALLOWANCE: usize = 100;
+
 #[derive(Clone)]
 pub struct ModePlaying {
     /// Maps coordinates to whatever block is there.
@@ -57,6 +59,7 @@ pub struct ModePlaying {
     conveyor_blocks: Vec<Block>,
     /// Index in the conveyor of the block being held by the player right now
     held: Option<HoldInfo>,
+    blocks_left: usize,
 
     /// How far down I have scrolled.
     /// When this is 0, block (0, 0) is in the dead center of the screen
@@ -109,6 +112,7 @@ impl ModePlaying {
             falling_blocks: Vec::new(),
             conveyor_blocks,
             held: None,
+            blocks_left: BLOCK_ALLOWANCE,
             scroll_depth: 0.0,
             max_depth: 0,
             center_of_mass: 0.0,
@@ -119,7 +123,10 @@ impl ModePlaying {
 
     pub fn update(&mut self, globals: &mut Globals) -> Transition {
         self.audio = AudioSignals::default();
-        self.handle_input(globals);
+        match self.handle_input(globals) {
+            Transition::None => {}
+            other => return other,
+        }
 
         // Damage blocks and record stats
         // Stability algorithm:
@@ -176,7 +183,7 @@ impl ModePlaying {
             .collect_vec();
 
         for (pos, mut chance) in poses_to_break_chance {
-            if !depths_with_rows.contains(&pos.y) {
+            if depths_with_rows.contains(&pos.y) {
                 chance *= 0.1;
             }
             let entry = self.stable_blocks.entry(pos);
@@ -259,15 +266,17 @@ impl ModePlaying {
                 InsertWithDelta(isize),
             }
 
-            let mut removal = Removal::Keep;
+            // By defaul, delete this chunk.
+            // Un-delete it if at least one thing is not out of bounds
+            let mut removal = Removal::Delete;
             'block: for faller_idx in (0..chunk.blocks.len()).rev() {
                 let (pos, block) = chunk.blocks.get_mut(faller_idx).unwrap();
                 // Starting down and moving up, check everything we fell past
                 for diff in 0..delta {
                     let passed_y = pos.y + chunk.dy as isize - diff;
-                    if passed_y > (self.max_depth + BOTTOM_VIEW_SIZE * 2) {
-                        removal = Removal::Delete;
-                        break 'block;
+                    if passed_y < (self.max_depth + BOTTOM_VIEW_SIZE * 2) {
+                        // k we're in bounds, don't de;ete it
+                        removal = Removal::Keep;
                     }
 
                     let rounded_pos = ICoord::new(pos.x, passed_y);
@@ -303,7 +312,7 @@ impl ModePlaying {
         Transition::None
     }
 
-    fn handle_input(&mut self, globals: &mut Globals) {
+    fn handle_input(&mut self, globals: &mut Globals) -> Transition {
         use macroquad::prelude::*;
 
         let (mx, my) = mouse_position_pixel();
@@ -339,8 +348,10 @@ impl ModePlaying {
                     let remainder = (CONVEYOR_Y_BOTTOM - my + BLOCK_SIZE) % 24.0;
                     if remainder < 16.0 {
                         let idx = ((CONVEYOR_Y_BOTTOM - my + BLOCK_SIZE) / 24.0) as usize;
-                        self.held = Some(HoldInfo { idx });
-                        self.audio.pick_up = true;
+                        if self.conveyor_blocks.len() > idx {
+                            self.held = Some(HoldInfo { idx });
+                            self.audio.pick_up = true;
+                        }
                     }
                 }
 
@@ -381,7 +392,12 @@ impl ModePlaying {
                         // poggers
                         let block = self.conveyor_blocks.remove(idx);
                         self.stable_blocks.insert(blockpos, block);
-                        self.conveyor_blocks.push(QuadRand.gen());
+
+                        if self.blocks_left > 0 {
+                            self.blocks_left -= 1;
+                            self.conveyor_blocks.push(QuadRand.gen());
+                        }
+
                         self.audio.put_down = true;
                     } else {
                         self.audio.rotate = true;
@@ -390,6 +406,16 @@ impl ModePlaying {
                     self.held = None;
                 }
             }
+        }
+
+        if self.conveyor_blocks.is_empty()
+            && is_mouse_button_pressed(MouseButton::Left)
+            && Rect::new(WIDTH - 70.0 + 16.0, 224.0, 32.0, 16.0).contains(vec2(mx, my))
+        {
+            macroquad::audio::stop_sound(globals.assets.sounds.engineer_gaming);
+            Transition::Swap(Gamemode::Denoument(ModeDenoument::new(self.center_of_mass)))
+        } else {
+            Transition::None
         }
     }
 
@@ -447,10 +473,22 @@ impl ModePlaying {
 
             for x_idx in -1..SCREEN_WIDTH + 1 {
                 let col = x_idx - SCREEN_WIDTH / 2;
+                let mut rng = SmallRng::seed_from_u64(row as u64 ^ (col as u64).rotate_left(32));
 
                 let (tex, rot) = if col.abs() < CHASM_WIDTH / 2 + 1 {
                     // we're inside the chasm
-                    (globals.assets.textures.dark_dirt, 0.0)
+                    let depth_mod = row as f32 / 20.0 + rng.gen_range(-0.2..0.2);
+                    let tex = if rng.gen_range(0.0..1.0) < depth_mod {
+                        let depth_mod = row as f32 / 100.0 + rng.gen_range(-0.5..0.5);
+                        if rng.gen_range(0.0..1.0) < depth_mod {
+                            globals.assets.textures.stone3
+                        } else {
+                            globals.assets.textures.stone2
+                        }
+                    } else {
+                        globals.assets.textures.stone
+                    };
+                    (tex, 0.0)
                 } else if row == 0 {
                     // we're at the top of the chasm
                     (globals.assets.textures.dirt_edge, -TAU / 4.0)
@@ -465,12 +503,21 @@ impl ModePlaying {
                 };
 
                 // Based on the block position, get darker as we go deeper
-                let pos_hash = ((row ^ col) as f64).powi(2).sin() as f32;
-                let depth_mod = 50.0;
-                let darkness = depth_mod / (-row as f32 - depth_mod) + 1.0;
-                let lightness = 1.0 - darkness + pos_hash * 0.2;
-                let lightness = (lightness * 100.0).round() / 100.0;
-                let col = Color::new(lightness, lightness, lightness, 1.0);
+                let mut deepness_color = |depth_mod: f32| {
+                    let jitter = rng.gen_range(-0.2..0.2);
+                    let darkness = depth_mod / (-row as f32 - depth_mod) + 1.0;
+                    let lightness = 1.0 - darkness + jitter * 0.2;
+                    (lightness * 100.0).round() / 100.0
+                };
+
+                let lightness = deepness_color(100.0).max(0.5);
+                let orangey = deepness_color(500.0) / 10.0;
+                let col = Color::new(
+                    lightness + orangey,
+                    lightness + orangey / 2.0,
+                    lightness,
+                    1.0,
+                );
 
                 let center_x = x_idx as f32 * BLOCK_SIZE;
                 let center_y = (y_idx as f32 - deficit) * BLOCK_SIZE;
@@ -520,37 +567,17 @@ impl ModePlaying {
             corner_y,
             WHITE,
         );
-
-        // Draw the number
-        let depth_string = format!("{:.0}", self.center_of_mass);
-        for (idx, c) in depth_string.chars().rev().enumerate() {
-            let cx = corner_x + 23.0 - (4 * idx) as f32;
-            let cy = corner_y + 13.0;
-
-            let sx = if let Some(digit) = c.to_digit(10) {
-                digit
-            } else if c == '-' {
-                10
-            } else {
-                // hmm
-                continue;
-            };
-            let sx = sx as f32 * 3.0;
-
-            draw_texture_ex(
-                globals.assets.textures.number_atlas,
-                cx,
-                cy,
-                WHITE,
-                DrawTextureParams {
-                    source: Some(Rect::new(sx, 0.0, 3.0, 5.0)),
-                    ..Default::default()
-                },
-            );
-        }
+        // Draw the depth
+        drawutils::draw_number(
+            self.center_of_mass.round() as i32,
+            corner_x + 27.0,
+            corner_y + 13.0,
+            globals,
+        );
 
         // Draw the conveyor
-        draw_texture(globals.assets.textures.conveyor, WIDTH - 70.0, 0.0, WHITE);
+        let conveyor_x = WIDTH - 70.0;
+        draw_texture(globals.assets.textures.conveyor, conveyor_x, 0.0, WHITE);
         for (idx, block) in self.conveyor_blocks.iter().enumerate() {
             let (cx, cy, color) = if matches!(&self.held, Some(held) if held.idx == idx) {
                 let blockpos = self.pixel_to_block(mx, my);
@@ -574,6 +601,17 @@ impl ModePlaying {
             };
 
             block.draw_absolute_color(cx, cy, color, globals);
+        }
+        // Draw the blocks left
+        drawutils::draw_number(self.blocks_left as i32, conveyor_x + 25.0, 6.0, globals);
+
+        if self.conveyor_blocks.is_empty() {
+            draw_texture(
+                globals.assets.textures.finish_popup,
+                conveyor_x + 16.0,
+                224.0,
+                WHITE,
+            );
         }
     }
 

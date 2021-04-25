@@ -35,13 +35,18 @@ pub struct Textures {
     pub connector_atlas: Texture2D,
     pub damage_atlas: Texture2D,
 
-    pub dark_dirt: Texture2D,
+    pub stone: Texture2D,
+    pub stone2: Texture2D,
+    pub stone3: Texture2D,
     pub dirt_edge: Texture2D,
     pub dirt_body: Texture2D,
 
     pub conveyor: Texture2D,
     pub depth_meter: Texture2D,
     pub number_atlas: Texture2D,
+    pub finish_popup: Texture2D,
+
+    pub denoument: Texture2D,
 }
 
 impl Textures {
@@ -57,13 +62,18 @@ impl Textures {
             connector_atlas: texture("connector_atlas").await,
             damage_atlas: texture("damage_atlas").await,
 
-            dark_dirt: texture("dirt").await,
-            dirt_edge: texture("reinforced_dirt").await,
-            dirt_body: texture("dirt_back").await,
+            stone: texture("stone").await,
+            stone2: texture("stone2").await,
+            stone3: texture("stone3").await,
+            dirt_edge: texture("chasm_edge").await,
+            dirt_body: texture("chasm_body").await,
 
             conveyor: texture("conveyor").await,
             depth_meter: texture("depth_meter").await,
             number_atlas: texture("number_atlas").await,
+            finish_popup: texture("finish_popup").await,
+
+            denoument: texture("denoument").await,
         }
     }
 }
@@ -98,7 +108,7 @@ impl Sounds {
 /// Path to the assets root
 static ASSETS_ROOT: Lazy<PathBuf> = Lazy::new(|| {
     if cfg!(target_arch = "wasm32") {
-        PathBuf::from("../assets")
+        PathBuf::from("./assets")
     } else if cfg!(debug_assertions) {
         PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/assets"))
     } else {

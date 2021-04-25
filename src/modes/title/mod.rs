@@ -46,6 +46,7 @@ impl ModeTitle {
         self.rules_highlighted = hovering_rules;
 
         if is_mouse_button_pressed(MouseButton::Left) {
+            macroquad::rand::srand((mx.to_bits() as u64) + ((my.to_bits() as u64) << 32));
             if self.play_highlighted {
                 Transition::Swap(Gamemode::Playing(ModePlaying::new()))
             } else if self.rules_highlighted {

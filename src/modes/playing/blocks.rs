@@ -145,9 +145,9 @@ impl Distribution<Block> for Standard {
             }
         } else {
             let kind = rng.gen();
-            // The connector must have at least one non-None value
-            let mut connectors = [Some(rng.gen()), None, None, None];
-            for item in connectors.iter_mut().skip(1) {
+            // The connector must have at least two non-None value
+            let mut connectors = [Some(rng.gen()), Some(rng.gen()), None, None];
+            for item in connectors.iter_mut().skip(2) {
                 *item = rng.gen();
             }
             connectors.shuffle(rng);
